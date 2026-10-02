@@ -1,96 +1,82 @@
-# Video → Khmer AI
+# KH AI Video → Khmer Dubbing
 
-Python desktop app that converts a video into Khmer subtitles and/or Khmer dubbed audio.
+Python desktop app: analyze speakers, translate speech to Khmer, generate Khmer voice + subtitles, export video.
 
 ```
-Video → Extract Audio → Whisper STT → Translate to Khmer → Khmer TTS → FFmpeg Export
+Video
+  → Extract Audio (FFmpeg)
+  → Speech-to-Text (Whisper)
+  → Analyze speakers / gender
+  → Translate → Khmer
+  → Khmer TTS (per speaker)
+  → Mix / replace audio (FFmpeg)
+  → Burn Khmer subtitles
+  → Export
 ```
 
-## Modes
-
-| Mode | What it does | Output |
-|------|----------------|--------|
-| **Mode 1 — Subtitle** | Transcribe → translate → burn Khmer SRT | `*_khmer_subtitle.mp4` + `.srt` |
-| **Mode 2 — Khmer voice** | Transcribe → translate → TTS → replace audio | `*_khmer_voice.mp4` |
-| **Mode 3 — Full AI dubbing** | Timed segments → TTS on timeline → mix + subs | `*_khmer_dubbed.mp4` |
-
-## Stack
+## Recommended beginner stack
 
 | Function | Tool |
 |----------|------|
-| GUI | CustomTkinter |
-| Extract / mux audio | FFmpeg |
-| Speech → text | faster-whisper |
-| Translate → Khmer | Bing → Google → MyMemory (auto-fallback + cache) |
-| Khmer text → speech | edge-tts (`km-KH-SreymomNeural` / `PisethNeural`) |
-| Timed audio assembly | pydub |
-| Subtitles | `.srt` generation |
+| **GUI** | CustomTkinter |
+| **Extract audio** | FFmpeg |
+| **Speech → text** | Whisper / faster-whisper |
+| **English/Chinese/etc. → Khmer** | Translation API (Bing → Google → MyMemory) |
+| **Khmer text → speech** | edge-tts (Khmer Male / Female) |
+| **Audio/video processing** | FFmpeg |
+| **Subtitles** | `.srt` + styled `.ass` (Battambang, red + white outline) |
+| **Progress** | CustomTkinter progress bar |
 
-## Requirements
+## Recommended flow (GUI)
 
-1. **Python 3.10+**
-2. **FFmpeg** on your PATH  
-   - Windows: [gyan.dev FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/)  
-   - Check: `ffmpeg -version`
-3. Internet (first Whisper model download + translation + Edge TTS)
+1. **Browse** video (`MP4 / MKV / AVI / MOV`)
+2. **Analyze Video** → detect language, speakers, male/female
+3. Review **Speakers** table → pick Khmer voice per speaker
+4. **KH Translate & Dub** → translate + TTS + mix + subtitles + export
+
+### Options (checkboxes)
+
+- Detect speakers  
+- Detect male / female voice  
+- Keep different voices  
+- Translate speech  
+- Generate Khmer speech  
+- Keep background music  
+- Generate Khmer subtitles  
+
+## Modes (pipeline)
+
+| Mode | Pipeline | Output |
+|------|----------|--------|
+| **1 — Subtitle** | Whisper → Translate → Khmer subs | `*_khmer_subtitle.mp4` |
+| **2 — Khmer voice** | STT → Translate → TTS → replace audio | `*_khmer_voice.mp4` |
+| **3 — Full AI dubbing** | Timed segments → TTS → mix BG → subs | `*_khmer_dubbed.mp4` |
 
 ## Setup
+
+1. Python 3.10+  
+2. FFmpeg on PATH (`ffmpeg -version`)  
+3. Install deps:
 
 ```bash
 cd VOZO-AI
 python -m venv .venv
-
-# Windows
 .venv\Scripts\activate
-
-# macOS / Linux
-# source .venv/bin/activate
-
 pip install -r requirements.txt
-```
-
-## Run
-
-```bash
 python main.py
 ```
 
-1. Click **Browse…** and pick an MP4/MKV/AVI/MOV  
-2. Choose a **Mode**  
-3. Pick **Khmer Female** or **Khmer Male**  
-4. Click **START CONVERSION**  
-5. Output lands in a `khmer_output` folder next to your video
+## Output location
 
-## GUI layout
+Next to your video, in `khmer_output/`:
 
-Matches the beginner mockup:
+- Dubbed / subtitled `.mp4`
+- `*_khmer.srt` / `*_khmer.ass`
+- `*_original.txt` / `*_khmer.txt`
 
-- Video browse  
-- Mode / Language / Voice dropdowns  
-- Checkboxes: Translate speech · Generate Khmer voice · Replace original audio · Burn subtitles  
-- Progress bar + live status  
+## Notes
 
-## Notes for beginners
-
-- Start with Whisper model **`base`**. Use **`small`** if accuracy is weak.
-- Mode 3 is a *beginner* dubbing path: it places speech near original timestamps but does **not** do perfect lip-sync or stem separation.
-- Translation uses Google via `deep-translator` (no API key). For production, swap in DeepL / Google Cloud Translate.
-- Edge TTS is free and needs no cloud key. Swap `app/pipeline/tts.py` for Google/Azure TTS later if you want.
-
-## Project layout
-
-```
-VOZO-AI/
-├── main.py                 # launch GUI
-├── requirements.txt
-├── app/
-│   ├── gui.py              # CustomTkinter UI
-│   └── pipeline/
-│       ├── runner.py       # Mode 1 / 2 / 3 orchestration
-│       ├── ffmpeg_utils.py
-│       ├── transcribe.py
-│       ├── translate.py
-│       ├── tts.py
-│       └── subtitles.py
-└── README.md
-```
+- Start with Whisper **`base`**; use **`small`** if accuracy is weak.
+- Subtitle font: **Battambang Bold** (`assets/fonts/`), size Biggest → Small in GUI.
+- Analyze speakers uses pitch clustering (beginner). For pro diarization later: pyannote.
+- Translation is free/multi-provider with local cache (`~/.vozo-ai/translate_cache.json`).

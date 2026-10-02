@@ -12,13 +12,14 @@ from .ffmpeg_utils import (
     burn_subtitles,
     extract_audio,
     mix_audio_with_background,
+    probe_duration_seconds,
     replace_audio,
     require_ffmpeg,
 )
 from .subtitles import write_ass, write_srt
 from .transcribe import transcribe_audio
 from .translate import translate_transcript
-from .tts import synthesize_speech, synthesize_timed_speech
+from .tts import synthesize_timed_speech
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -28,14 +29,18 @@ class ConversionOptions:
     video_path: Path
     mode: str  # "subtitle" | "voice" | "full"
     language: str = "Khmer"
-    voice: str = "Khmer Female"
+    voice: str = "Khmer Female 1"
     translate_speech: bool = True
     generate_voice: bool = True
     replace_audio: bool = True
     burn_in_subtitles: bool = True
+    keep_background: bool = False
     whisper_model: str = "base"
-    subtitle_font_size: int = 110
+    subtitle_font_size: int = 64
     output_dir: Path | None = None
+    speaker_voices: dict[str, str] | None = None
+    analyzed_segments: list | None = None
+    pre_transcript: object | None = None
 
 
 @dataclass
@@ -44,6 +49,34 @@ class ConversionResult:
     srt_path: Path | None
     transcript_path: Path | None
     khmer_text_path: Path | None
+
+
+def _voice_for_time(
+    start: float,
+    end: float,
+    *,
+    default_voice: str,
+    speaker_voices: dict[str, str] | None,
+    analyzed_segments: list | None,
+) -> str:
+    """Pick Khmer voice by overlapping Analyze speaker segment."""
+    if not speaker_voices or not analyzed_segments:
+        return default_voice
+    mid = (start + end) / 2.0
+    best_sid = None
+    best_overlap = 0.0
+    for seg in analyzed_segments:
+        s = float(getattr(seg, "start", 0.0))
+        e = float(getattr(seg, "end", 0.0))
+        overlap = max(0.0, min(end, e) - max(start, s))
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_sid = getattr(seg, "speaker_id", None)
+        elif best_sid is None and s <= mid <= e:
+            best_sid = getattr(seg, "speaker_id", None)
+    if best_sid and best_sid in speaker_voices:
+        return speaker_voices[best_sid]
+    return default_voice
 
 
 def run_conversion(
@@ -63,6 +96,7 @@ def run_conversion(
     out_dir = (options.output_dir or video_path.parent / "khmer_output").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = video_path.stem
+    video_duration = probe_duration_seconds(video_path)
 
     work = Path(tempfile.mkdtemp(prefix="vozo_khmer_"))
     try:
@@ -70,8 +104,12 @@ def run_conversion(
         wav_path = work / "audio.wav"
         extract_audio(video_path, wav_path)
 
-        report(20, "Transcribing speech (Whisper)...")
-        transcript = transcribe_audio(wav_path, model_size=options.whisper_model)
+        if options.pre_transcript is not None:
+            report(20, "Using Analyze transcript...")
+            transcript = options.pre_transcript  # type: ignore[assignment]
+        else:
+            report(20, "Transcribing speech (Whisper)...")
+            transcript = transcribe_audio(wav_path, model_size=options.whisper_model)
         transcript_path = out_dir / f"{stem}_original.txt"
         transcript_path.write_text(transcript.text, encoding="utf-8")
 
@@ -79,7 +117,8 @@ def run_conversion(
         khmer_text_path: Path | None = None
         if options.translate_speech:
             report(40, "Translating to Khmer...")
-            khmer = translate_transcript(transcript, target="km")
+            src_lang = getattr(transcript, "language", "auto") or "auto"
+            khmer = translate_transcript(transcript, source=src_lang, target="km")
             khmer_text_path = out_dir / f"{stem}_khmer.txt"
             khmer_text_path.write_text(khmer.text, encoding="utf-8")
 
@@ -100,6 +139,46 @@ def run_conversion(
                 shutil.copy2(src, dest)
             return dest
 
+        def _build_timed_voice(status_pct: float) -> Path:
+            report(status_pct, "Generating timed Khmer voice...")
+            timed = []
+            for seg in khmer.segments:
+                vlabel = _voice_for_time(
+                    seg.start,
+                    seg.end,
+                    default_voice=options.voice,
+                    speaker_voices=options.speaker_voices,
+                    analyzed_segments=options.analyzed_segments,
+                )
+                timed.append((seg.start, seg.end, seg.text, vlabel))
+            voice_audio = work / "khmer_timed.wav"
+            synthesize_timed_speech(
+                timed,
+                voice_audio,
+                voice_label=options.voice,
+                work_dir=work / "segments",
+                total_duration_sec=video_duration or None,
+            )
+            return voice_audio
+
+        def _apply_khmer_audio(voice_audio: Path, dest_video: Path) -> Path:
+            report(82, "Clearing original voice / applying Khmer audio...")
+            speech_times = [(s.start, s.end) for s in khmer.segments]
+            # Default path: hard replace (no original dialogue).
+            if options.keep_background:
+                mix_audio_with_background(
+                    video_path,
+                    voice_audio,
+                    dest_video,
+                    speech_segments=speech_times,
+                    duck_original_speech=True,
+                    background_volume=0.06,
+                    voice_volume=1.45,
+                )
+            else:
+                replace_audio(video_path, voice_audio, dest_video)
+            return dest_video
+
         if mode == "subtitle":
             report(70, "Burning Khmer subtitles into video...")
             output_video = out_dir / f"{stem}_khmer_subtitle.mp4"
@@ -109,45 +188,20 @@ def run_conversion(
                 output_video = out_dir / f"{stem}_original_copy{video_path.suffix}"
                 shutil.copy2(video_path, output_video)
 
-        elif mode == "voice":
-            if not options.generate_voice:
-                raise ValueError("Mode 2 requires Generate Khmer voice.")
-            report(65, "Generating Khmer voice...")
-            voice_audio = work / "khmer_voice.mp3"
-            synthesize_speech(khmer.text, voice_audio, voice_label=options.voice)
-
-            report(80, "Replacing original audio...")
-            voiced = work / "voiced.mp4"
-            if options.replace_audio:
-                replace_audio(video_path, voice_audio, voiced)
+        elif mode in ("voice", "full"):
+            if not options.generate_voice and mode == "voice":
+                raise ValueError("Voice mode requires Generate Khmer speech.")
+            if options.generate_voice:
+                voice_audio = _build_timed_voice(65 if mode == "voice" else 60)
+                staged = work / "dubbed_stage.mp4"
+                _apply_khmer_audio(voice_audio, staged)
             else:
-                mix_audio_with_background(video_path, voice_audio, voiced)
+                staged = video_path
 
             report(90, "Adding Khmer subtitles...")
-            output_video = out_dir / f"{stem}_khmer_voice.mp4"
-            _maybe_burn(voiced, output_video)
-
-        elif mode == "full":
-            report(60, "Generating timed Khmer speech...")
-            timed = [(s.start, s.end, s.text) for s in khmer.segments]
-            voice_audio = work / "khmer_timed.wav"
-            synthesize_timed_speech(
-                timed,
-                voice_audio,
-                voice_label=options.voice,
-                work_dir=work / "segments",
-            )
-
-            report(80, "Mixing voice with background...")
-            dubbed = work / "dubbed.mp4"
-            if options.replace_audio:
-                replace_audio(video_path, voice_audio, dubbed)
-            else:
-                mix_audio_with_background(video_path, voice_audio, dubbed)
-
-            report(90, "Adding Khmer subtitles...")
-            output_video = out_dir / f"{stem}_khmer_dubbed.mp4"
-            _maybe_burn(dubbed, output_video)
+            suffix = "voice" if mode == "voice" else "dubbed"
+            output_video = out_dir / f"{stem}_khmer_{suffix}.mp4"
+            _maybe_burn(staged, output_video)
         else:
             raise ValueError(f"Unknown mode: {options.mode}")
 
