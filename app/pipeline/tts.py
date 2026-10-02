@@ -36,10 +36,13 @@ def resolve_voice_id(voice_label: str) -> str:
 
 
 def _sanitize_tts_text(text: str) -> str:
+    from .numbers_km import khmerize_numbers_in_text
+
     text = (text or "").replace("\u00a0", " ")
     text = re.sub(r"\s+", " ", text).strip()
     if not text or not _SPEAKABLE_RE.search(text):
         return ""
+    text = khmerize_numbers_in_text(text)
     text = text.replace("&", " and ").replace("<", " ").replace(">", " ")
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > 800:

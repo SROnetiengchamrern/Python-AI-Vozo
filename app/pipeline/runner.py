@@ -16,8 +16,9 @@ from .ffmpeg_utils import (
     replace_audio,
     require_ffmpeg,
 )
+from .numbers_km import khmerize_numbers_in_text
 from .subtitles import write_ass, write_srt
-from .transcribe import transcribe_audio
+from .transcribe import Transcript, TranscriptSegment, transcribe_audio
 from .translate import translate_transcript
 from .tts import synthesize_timed_speech
 
@@ -79,6 +80,21 @@ def _voice_for_time(
     return default_voice
 
 
+def _khmerize_transcript_numbers(transcript: Transcript) -> Transcript:
+    segs = [
+        TranscriptSegment(
+            start=seg.start,
+            end=seg.end,
+            text=khmerize_numbers_in_text(seg.text or ""),
+        )
+        for seg in transcript.segments
+    ]
+    full = khmerize_numbers_in_text(transcript.text or "")
+    if not full:
+        full = " ".join(s.text for s in segs if s.text).strip()
+    return Transcript(language=transcript.language, text=full, segments=segs)
+
+
 def run_conversion(
     options: ConversionOptions,
     progress: ProgressCallback | None = None,
@@ -119,8 +135,11 @@ def run_conversion(
             report(40, "Translating to Khmer...")
             src_lang = getattr(transcript, "language", "auto") or "auto"
             khmer = translate_transcript(transcript, source=src_lang, target="km")
-            khmer_text_path = out_dir / f"{stem}_khmer.txt"
-            khmer_text_path.write_text(khmer.text, encoding="utf-8")
+
+        # Speak/show money-style numbers in Khmer units (៥មុឺន, ១លាន, …).
+        khmer = _khmerize_transcript_numbers(khmer)
+        khmer_text_path = out_dir / f"{stem}_khmer.txt"
+        khmer_text_path.write_text(khmer.text, encoding="utf-8")
 
         report(55, "Writing Khmer subtitles...")
         srt_path = out_dir / f"{stem}_khmer.srt"
