@@ -1,36 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Video → Khmer AI
 
-## Getting Started
+Python desktop app that converts a video into Khmer subtitles and/or Khmer dubbed audio.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Video → Extract Audio → Whisper STT → Translate to Khmer → Khmer TTS → FFmpeg Export
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Modes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Mode | What it does | Output |
+|------|----------------|--------|
+| **Mode 1 — Subtitle** | Transcribe → translate → burn Khmer SRT | `*_khmer_subtitle.mp4` + `.srt` |
+| **Mode 2 — Khmer voice** | Transcribe → translate → TTS → replace audio | `*_khmer_voice.mp4` |
+| **Mode 3 — Full AI dubbing** | Timed segments → TTS on timeline → mix + subs | `*_khmer_dubbed.mp4` |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Stack
 
-## Learn More
+| Function | Tool |
+|----------|------|
+| GUI | CustomTkinter |
+| Extract / mux audio | FFmpeg |
+| Speech → text | faster-whisper |
+| Translate → Khmer | Bing → Google → MyMemory (auto-fallback + cache) |
+| Khmer text → speech | edge-tts (`km-KH-SreymomNeural` / `PisethNeural`) |
+| Timed audio assembly | pydub |
+| Subtitles | `.srt` generation |
 
-To learn more about Next.js, take a look at the following resources:
+## Requirements
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. **Python 3.10+**
+2. **FFmpeg** on your PATH  
+   - Windows: [gyan.dev FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/)  
+   - Check: `ffmpeg -version`
+3. Internet (first Whisper model download + translation + Edge TTS)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Setup
 
-## Deploy on Vercel
+```bash
+cd VOZO-AI
+python -m venv .venv
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# Windows
+.venv\Scripts\activate
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# macOS / Linux
+# source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+## Run
+
+```bash
+python main.py
+```
+
+1. Click **Browse…** and pick an MP4/MKV/AVI/MOV  
+2. Choose a **Mode**  
+3. Pick **Khmer Female** or **Khmer Male**  
+4. Click **START CONVERSION**  
+5. Output lands in a `khmer_output` folder next to your video
+
+## GUI layout
+
+Matches the beginner mockup:
+
+- Video browse  
+- Mode / Language / Voice dropdowns  
+- Checkboxes: Translate speech · Generate Khmer voice · Replace original audio · Burn subtitles  
+- Progress bar + live status  
+
+## Notes for beginners
+
+- Start with Whisper model **`base`**. Use **`small`** if accuracy is weak.
+- Mode 3 is a *beginner* dubbing path: it places speech near original timestamps but does **not** do perfect lip-sync or stem separation.
+- Translation uses Google via `deep-translator` (no API key). For production, swap in DeepL / Google Cloud Translate.
+- Edge TTS is free and needs no cloud key. Swap `app/pipeline/tts.py` for Google/Azure TTS later if you want.
+
+## Project layout
+
+```
+VOZO-AI/
+├── main.py                 # launch GUI
+├── requirements.txt
+├── app/
+│   ├── gui.py              # CustomTkinter UI
+│   └── pipeline/
+│       ├── runner.py       # Mode 1 / 2 / 3 orchestration
+│       ├── ffmpeg_utils.py
+│       ├── transcribe.py
+│       ├── translate.py
+│       ├── tts.py
+│       └── subtitles.py
+└── README.md
+```
