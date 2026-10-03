@@ -105,7 +105,7 @@ def replace_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path
     Replace video audio completely with a new track.
 
     Keeps full video length. Pads short audio with silence so original
-    dialogue cannot leak back in.
+    dialogue cannot leak back in. Boosts Khmer track clarity.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = probe_duration_seconds(video_path)
@@ -115,7 +115,9 @@ def replace_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path
         "-i",
         str(audio_path),
         "-filter_complex",
-        "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,apad[a]",
+        "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+        "highpass=f=90,equalizer=f=2800:t=q:w=1.0:g=2.5,"
+        "loudnorm=I=-14:TP=-1.5:LRA=8,apad[a]",
         "-map",
         "0:v:0",
         "-map",

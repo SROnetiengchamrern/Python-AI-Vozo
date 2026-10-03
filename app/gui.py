@@ -359,7 +359,7 @@ class VideoKhmerApp(ctk.CTk):
         for i in range(3):
             prow.grid_columnconfigure(i, weight=1)
 
-        ctk.CTkLabel(prow, text="Subtitle Style", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(
+        ctk.CTkLabel(prow, text="Voice Style", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(
             row=0, column=0, sticky="w", padx=(0, 8)
         )
         ctk.CTkLabel(prow, text="Sub Size", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(
@@ -369,11 +369,11 @@ class VideoKhmerApp(ctk.CTk):
             row=0, column=2, sticky="w", padx=(8, 0)
         )
 
-        self.style_var = ctk.StringVar(value="Cinema Red")
+        self.voice_style_var = ctk.StringVar(value="Drama")
         self.style_menu = ctk.CTkOptionMenu(
             prow,
-            values=["Cinema Red", "Default"],
-            variable=self.style_var,
+            values=["Drama", "Natural", "Soft", "Energetic"],
+            variable=self.voice_style_var,
             fg_color=PANEL_2,
             button_color=ACCENT,
         )
@@ -856,6 +856,7 @@ class VideoKhmerApp(ctk.CTk):
             burn_in_subtitles=self.gen_subs_var.get(),
             whisper_model=self.model_var.get(),
             subtitle_font_size=SUBTITLE_SIZES.get(self.sub_size_var.get(), 64),
+            voice_style=self.voice_style_var.get(),
             output_dir=output_dir,
             speaker_voices=voice_map or None,
             analyzed_segments=self.analysis.segments if self.analysis else None,

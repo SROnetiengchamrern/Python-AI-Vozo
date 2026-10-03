@@ -17,7 +17,14 @@ from .ffmpeg_utils import (
     require_ffmpeg,
 )
 from .numbers_km import khmerize_numbers_in_text
-from .subtitles import write_ass, write_srt
+from .subtitles import (
+    build_timed_cues,
+    speak_text_from_cue,
+    subtitle_max_chars,
+    wrap_two_lines,
+    write_ass_cues,
+    write_srt_cues,
+)
 from .transcribe import Transcript, TranscriptSegment, transcribe_audio
 from .translate import translate_transcript
 from .tts import synthesize_timed_speech
@@ -38,6 +45,7 @@ class ConversionOptions:
     keep_background: bool = False
     whisper_model: str = "base"
     subtitle_font_size: int = 64
+    voice_style: str = "Drama"
     output_dir: Path | None = None
     speaker_voices: dict[str, str] | None = None
     analyzed_segments: list | None = None
@@ -141,14 +149,23 @@ def run_conversion(
         khmer_text_path = out_dir / f"{stem}_khmer.txt"
         khmer_text_path.write_text(khmer.text, encoding="utf-8")
 
-        report(55, "Writing Khmer subtitles...")
+        # One cue list drives BOTH speech and subtitles (same words/timing).
+        max_chars = subtitle_max_chars(options.subtitle_font_size)
+        cues = build_timed_cues(khmer, max_chars=max_chars)
         srt_path = out_dir / f"{stem}_khmer.srt"
         ass_path = out_dir / f"{stem}_khmer.ass"
-        write_srt(khmer, srt_path)
-        write_ass(khmer, ass_path, font_size=options.subtitle_font_size)
 
         mode = options.mode.lower()
         output_video: Path
+
+        def _write_subs(final_cues: list) -> None:
+            report(88, "Writing Khmer subtitles (matched to voice)...")
+            write_srt_cues(final_cues, srt_path)
+            write_ass_cues(
+                final_cues,
+                ass_path,
+                font_size=options.subtitle_font_size,
+            )
 
         def _maybe_burn(src: Path, dest: Path) -> Path:
             if options.burn_in_subtitles:
@@ -158,27 +175,36 @@ def run_conversion(
                 shutil.copy2(src, dest)
             return dest
 
-        def _build_timed_voice(status_pct: float) -> Path:
+        def _build_timed_voice(status_pct: float) -> tuple[Path, list]:
             report(status_pct, "Generating timed Khmer voice...")
             timed = []
-            for seg in khmer.segments:
+            for start, end, text in cues:
+                spoken = speak_text_from_cue(text)
+                if not spoken:
+                    continue
                 vlabel = _voice_for_time(
-                    seg.start,
-                    seg.end,
+                    start,
+                    end,
                     default_voice=options.voice,
                     speaker_voices=options.speaker_voices,
                     analyzed_segments=options.analyzed_segments,
                 )
-                timed.append((seg.start, seg.end, seg.text, vlabel))
+                timed.append((start, end, spoken, vlabel))
             voice_audio = work / "khmer_timed.wav"
-            synthesize_timed_speech(
+            audio_path, placements = synthesize_timed_speech(
                 timed,
                 voice_audio,
                 voice_label=options.voice,
                 work_dir=work / "segments",
                 total_duration_sec=video_duration or None,
+                style=options.voice_style,
             )
-            return voice_audio
+            # Subtitles show exactly what was spoken, at when it was spoken.
+            matched = [
+                (s, e, wrap_two_lines(t, max_chars=max_chars))
+                for s, e, t in placements
+            ]
+            return audio_path, matched
 
         def _apply_khmer_audio(voice_audio: Path, dest_video: Path) -> Path:
             report(82, "Clearing original voice / applying Khmer audio...")
@@ -199,6 +225,7 @@ def run_conversion(
             return dest_video
 
         if mode == "subtitle":
+            _write_subs(cues)
             report(70, "Burning Khmer subtitles into video...")
             output_video = out_dir / f"{stem}_khmer_subtitle.mp4"
             if options.burn_in_subtitles:
@@ -211,10 +238,14 @@ def run_conversion(
             if not options.generate_voice and mode == "voice":
                 raise ValueError("Voice mode requires Generate Khmer speech.")
             if options.generate_voice:
-                voice_audio = _build_timed_voice(65 if mode == "voice" else 60)
+                voice_audio, matched_cues = _build_timed_voice(
+                    65 if mode == "voice" else 60
+                )
+                _write_subs(matched_cues or cues)
                 staged = work / "dubbed_stage.mp4"
                 _apply_khmer_audio(voice_audio, staged)
             else:
+                _write_subs(cues)
                 staged = video_path
 
             report(90, "Adding Khmer subtitles...")

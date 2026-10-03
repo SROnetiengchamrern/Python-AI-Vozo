@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .transcribe import Transcript, TranscriptSegment
 
-_CACHE_PATH = Path.home() / ".vozo-ai" / "translate_cache_v2.json"
+_CACHE_PATH = Path.home() / ".vozo-ai" / "translate_cache_v3.json"
 _KHMER_RE = re.compile(r"[\u1780-\u17FF]")
 _MAX_CHARS = 4000
 
@@ -166,19 +166,37 @@ def _looks_like_khmer(text: str) -> bool:
     return (kh / letters) >= 0.45
 
 
+def _post_clean_khmer(text: str) -> str:
+    """Clean Khmer MT without punching holes where names were."""
+    text = (text or "").replace("\u00a0", " ")
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    # Only strip multi-word English / very long tokens (keep short names).
+    text = re.sub(r"[A-Za-z]{3,}(?:\s+[A-Za-z]{3,}){1,}", " ", text)
+    text = re.sub(r"[A-Za-z]{10,}", " ", text)
+    # Fix empty possessives left by removed English: "របស់ ។" → "។"
+    text = re.sub(r"របស់\s*([។៕!?])", r"\1", text)
+    text = re.sub(r"\s+([។៕!?])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _translate_cached(text: str, *, source: str, target: str) -> str:
     text = _clean_source(text)
     if not text:
         return ""
     if _looks_like_khmer(text) and not re.search(r"[A-Za-z]{3,}", text):
-        return text
+        return _post_clean_khmer(text)
 
     cached = _cache_get(text, source, target)
     if cached is not None and _looks_like_khmer(cached):
-        return cached
+        return _post_clean_khmer(cached)
 
     out = _translate_with_fallback(text, source=source, target=target)
     if out:
+        out = _post_clean_khmer(out)
         _cache_put(text, source, target, out)
     return out
 
