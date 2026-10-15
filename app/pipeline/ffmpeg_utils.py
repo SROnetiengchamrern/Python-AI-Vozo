@@ -100,24 +100,40 @@ def extract_audio(video_path: Path, audio_path: Path) -> Path:
     return audio_path
 
 
-def replace_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
+def replace_audio(
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    *,
+    voice_eq: bool = True,
+) -> Path:
     """
     Replace video audio completely with a new track.
 
     Keeps full video length. Pads short audio with silence so original
-    dialogue cannot leak back in. Boosts Khmer track clarity.
+    dialogue cannot leak back in. voice_eq boosts Khmer-only tracks;
+    turn it off when the input is already a voice+BGM mix.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = probe_duration_seconds(video_path)
+    if voice_eq:
+        afilter = (
+            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            "highpass=f=90,equalizer=f=2800:t=q:w=1.0:g=2.5,"
+            "loudnorm=I=-14:TP=-1.5:LRA=8,apad[a]"
+        )
+    else:
+        afilter = (
+            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            "loudnorm=I=-16:TP=-1.5:LRA=11,apad[a]"
+        )
     args = [
         "-i",
         str(video_path),
         "-i",
         str(audio_path),
         "-filter_complex",
-        "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
-        "highpass=f=90,equalizer=f=2800:t=q:w=1.0:g=2.5,"
-        "loudnorm=I=-14:TP=-1.5:LRA=8,apad[a]",
+        afilter,
         "-map",
         "0:v:0",
         "-map",
@@ -181,13 +197,16 @@ def mix_audio_with_background(
     voice_path: Path,
     output_path: Path,
     *,
-    background_volume: float = 0.08,
-    voice_volume: float = 1.4,
+    background_volume: float = 0.22,
+    voice_volume: float = 1.35,
     speech_segments: list[tuple[float, float]] | None = None,
     duck_original_speech: bool = True,
 ) -> Path:
     """
-    Keep quiet music/SFX bed, hard-mute original dialogue, overlay Khmer voice.
+    Keep original music/SFX under Khmer voice.
+
+    Lowers center vocals, ducks (does not erase) dialogue windows so BGM
+    still plays during speech.
     """
     from pydub import AudioSegment
 
@@ -228,13 +247,13 @@ def mix_audio_with_background(
 
         bed_wav = work / "bed.wav"
         try:
-            # Reduce centered vocals, then lower overall bed.
+            # Soften centered dialogue, keep music side energy, then set bed level.
             run_ffmpeg(
                 [
                     "-i",
                     str(orig_wav),
                     "-af",
-                    f"stereotools=mlev=0.05,volume={background_volume}",
+                    f"stereotools=mlev=0.25,volume={background_volume}",
                     str(bed_wav),
                 ]
             )
@@ -251,8 +270,8 @@ def mix_audio_with_background(
 
         bed = AudioSegment.from_file(bed_wav)
         if duck_original_speech and speech_segments:
-            # Hard silence original dialogue windows.
-            bed = _duck_speech_regions(bed, speech_segments, duck_gain_db=-60.0)
+            # Duck old voice windows, but keep music audible under Khmer.
+            bed = _duck_speech_regions(bed, speech_segments, duck_gain_db=-14.0)
 
         voice = AudioSegment.from_file(voice_path)
         if voice_volume != 1.0:
@@ -272,7 +291,8 @@ def mix_audio_with_background(
         mixed = bed.overlay(voice)
         mixed_wav = work / "mixed.wav"
         mixed.export(str(mixed_wav), format="wav")
-        return replace_audio(video_path, mixed_wav, output_path)
+        # Do not apply voice-only EQ — that removes music.
+        return replace_audio(video_path, mixed_wav, output_path, voice_eq=False)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -305,11 +325,11 @@ def _duck_speech_regions(
     audio: "AudioSegment",
     segments: list[tuple[float, float]],
     *,
-    duck_gain_db: float = -60.0,
+    duck_gain_db: float = -14.0,
 ) -> "AudioSegment":
     from pydub import AudioSegment
 
-    windows = _merge_speech_windows(segments)
+    windows = _merge_speech_windows(segments, pad=0.08, merge_gap=0.35)
     if not windows:
         return audio
 
@@ -323,10 +343,9 @@ def _duck_speech_regions(
             continue
         if s > cursor_ms:
             out += audio[cursor_ms:s]
-        # Near-silence during original dialogue.
-        out += AudioSegment.silent(duration=e - s, frame_rate=audio.frame_rate).set_channels(
-            audio.channels
-        )
+        # Keep music bed under Khmer (do not wipe to silence).
+        chunk = audio[s:e] + duck_gain_db
+        out += chunk
         cursor_ms = e
     if cursor_ms < total_ms:
         out += audio[cursor_ms:total_ms]

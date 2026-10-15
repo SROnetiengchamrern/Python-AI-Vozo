@@ -235,10 +235,11 @@ def run_conversion(
                     dest_video,
                     speech_segments=speech_times,
                     duck_original_speech=True,
-                    background_volume=0.06,
-                    voice_volume=1.45,
+                    background_volume=0.22,
+                    voice_volume=1.35,
                 )
             else:
+                # Unchecked = Khmer voice only (no music).
                 replace_audio(video_path, voice_audio, dest_video)
             return dest_video
 

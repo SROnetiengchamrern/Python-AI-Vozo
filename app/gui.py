@@ -319,7 +319,7 @@ class VideoKhmerApp(ctk.CTk):
         self.keep_voices_var = ctk.BooleanVar(value=True)
         self.translate_var = ctk.BooleanVar(value=True)
         self.gen_speech_var = ctk.BooleanVar(value=True)
-        self.keep_bg_var = ctk.BooleanVar(value=False)
+        self.keep_bg_var = ctk.BooleanVar(value=True)
         self.gen_subs_var = ctk.BooleanVar(value=True)
         self.auto_detect_var = ctk.BooleanVar(value=True)
         self.manual_voice_var = ctk.BooleanVar(value=True)
@@ -336,7 +336,7 @@ class VideoKhmerApp(ctk.CTk):
         ]
         right_opts = [
             ("Generate Khmer speech", self.gen_speech_var),
-            ("Keep BGM only (hard-mute original voice)", self.keep_bg_var),
+            ("Keep original music (mute old voice)", self.keep_bg_var),
             ("Generate Khmer subtitles", self.gen_subs_var),
         ]
         self.option_checks: list[ctk.CTkCheckBox] = []

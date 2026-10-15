@@ -130,6 +130,25 @@ def _budget_text_to_window(text: str, available_ms: int) -> str:
     return text[:cut].strip()
 
 
+_last_tts_error: str | None = None
+
+
+def _format_tts_error(err: Exception | None) -> str:
+    if err is None:
+        return "unknown error"
+    msg = f"{type(err).__name__}: {err}"
+    low = msg.lower()
+    if "403" in msg or "handshake" in low:
+        return (
+            "Microsoft Edge TTS blocked the request (403).\n"
+            "Update edge-tts:  pip install -U \"edge-tts>=7.3.1\"\n"
+            "Then restart the app and try again."
+        )
+    if "getaddrinfo" in low or "cannot connect" in low or "network" in low:
+        return "No internet / cannot reach Edge TTS. Check connection and retry."
+    return msg
+
+
 async def _save_with_retry(
     text: str,
     voice: str,
@@ -137,25 +156,31 @@ async def _save_with_retry(
     *,
     rate: str = "+0%",
     pitch: str = "+0Hz",
-    retries: int = 4,
+    retries: int = 5,
 ) -> bool:
-    delay = 0.7
+    global _last_tts_error
+    delay = 0.8
     last_err: Exception | None = None
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             communicate = edge_tts.Communicate(
                 text=text, voice=voice, rate=rate, pitch=pitch
             )
             await communicate.save(str(output_path))
             if output_path.exists() and output_path.stat().st_size > 0:
+                _last_tts_error = None
                 return True
             last_err = NoAudioReceived("empty audio file")
         except NoAudioReceived as err:
             last_err = err
         except Exception as err:  # noqa: BLE001
             last_err = err
+            # 403 / handshake: wait longer — token/clock may refresh.
+            if "403" in str(err) or "Handshake" in type(err).__name__:
+                delay = max(delay, 2.0 + attempt)
         await asyncio.sleep(delay)
-        delay = min(delay * 1.7, 7.0)
+        delay = min(delay * 1.6, 8.0)
+    _last_tts_error = _format_tts_error(last_err)
     logger.warning("TTS skipped: %s (%s)", text[:50], last_err)
     return False
 
@@ -405,9 +430,9 @@ def synthesize_timed_speech(
         placements.append((position / 1000.0, end_ms / 1000.0, text))
 
     if not placements:
+        detail = _last_tts_error or "Check internet and try again."
         raise RuntimeError(
-            "Edge TTS produced no usable audio clips.\n"
-            "Check internet and try again."
+            "Edge TTS produced no usable audio clips.\n" + detail
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
