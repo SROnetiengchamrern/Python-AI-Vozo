@@ -41,8 +41,11 @@ KHMER_VOICE_OPTIONS = [
     "Khmer Male 2",
 ]
 
-_MAX_SPEEDUP = 1.15
+# Mild speed-up only. Long videos lock each line to its cue window (no drift stack).
+_MAX_SPEEDUP = 1.28
 _MIN_SLOWDOWN = 0.94
+# Slightly conservative — female Natural (-8%) reads slower than raw Edge default.
+_CHARS_PER_SEC = 10.0
 _SPEAKABLE_RE = re.compile(r"[\u1780-\u17B3\u17B6-\u17C8A-Za-z0-9]")
 
 
@@ -93,6 +96,38 @@ def _sanitize_tts_text(text: str) -> str:
     if not _SPEAKABLE_RE.search(text):
         return ""
     return text
+
+
+def _budget_text_to_window(text: str, available_ms: int) -> str:
+    """
+    Shorten Khmer so it can be spoken inside the cue window.
+
+    Keeps voice/title/picture aligned on long videos (no stacked delay).
+    Subtitles must use this same shortened string.
+    """
+    text = _sanitize_tts_text(text)
+    if not text:
+        return ""
+    # Allow mild speed-up headroom in the budget.
+    max_chars = max(18, int((available_ms / 1000.0) * _CHARS_PER_SEC * _MAX_SPEEDUP))
+    if len(text) <= max_chars:
+        return text
+    # Prefer a break in the last ~45% of the window (don't stop at the first ។).
+    lo = max(10, int(max_chars * 0.55))
+    cut = -1
+    for mark in ("។", "៕", "!", "?"):
+        pos = text.rfind(mark, lo, max_chars + 1)
+        if pos > cut:
+            cut = pos
+    if cut >= lo:
+        return text[: cut + 1].strip()
+    space = text.rfind(" ", lo, max_chars + 1)
+    if space >= lo:
+        return text[:space].strip()
+    cut = max_chars
+    while cut > 10 and cut <= len(text) and "\u17b6" <= text[cut - 1] <= "\u17d3":
+        cut -= 1
+    return text[:cut].strip()
 
 
 async def _save_with_retry(
@@ -271,64 +306,79 @@ def synthesize_timed_speech(
     style: str = "Drama",
 ) -> tuple[Path, list[tuple[float, float, str]]]:
     """
-    Build timed Khmer dub from subtitle cues.
+    Build timed Khmer dub locked to picture cue times.
 
-    Returns (audio_path, placements) where placements are the exact
-    (start, end, spoken_text) that were voiced — use these for subtitles.
+    Each line starts at its cue time and must finish before the next cue.
+    Text is shortened to fit when needed so spoken words == on-screen title.
+    This prevents long-video drift (voice minutes behind picture).
     """
     from pydub import AudioSegment
 
-    normalized: list[tuple[float, float, str, str]] = []
+    raw_items: list[tuple[float, float, str, str]] = []
     for item in segments:
         if len(item) == 4:
             start, end, text, vlabel = item  # type: ignore[misc]
-            spoken = _sanitize_tts_text(text)
-            if not spoken:
-                continue
-            normalized.append((float(start), float(end), spoken, vlabel or voice_label))
+            raw_items.append(
+                (float(start), float(end), text, vlabel or voice_label)
+            )
         else:
             start, end, text = item  # type: ignore[misc]
-            spoken = _sanitize_tts_text(text)
-            if not spoken:
-                continue
-            normalized.append((float(start), float(end), spoken, voice_label))
+            raw_items.append((float(start), float(end), text, voice_label))
+
+    if not raw_items:
+        raise ValueError("No timed segments available for TTS.")
+
+    raw_items.sort(key=lambda x: x[0])
+
+    last_end = max(end for _, end, _, _ in raw_items)
+    if total_duration_sec and total_duration_sec > last_end:
+        total_ms = int(math.ceil(total_duration_sec * 1000)) + 250
+    else:
+        total_ms = int(math.ceil(last_end * 1000)) + 1000
+
+    # Budget each cue into [start, next_start) BEFORE TTS so speech matches title.
+    normalized: list[tuple[float, float, str, str]] = []
+    for i, (start, end, text, vlabel) in enumerate(raw_items):
+        start_ms = max(0, int(start * 1000))
+        soft_ms = max(240, int((end - start) * 1000))
+        if i + 1 < len(raw_items):
+            next_start_ms = max(0, int(raw_items[i + 1][0] * 1000))
+            # Use almost all time until the next line (picture lock).
+            available_ms = max(240, next_start_ms - start_ms - 40)
+        else:
+            available_ms = max(soft_ms, total_ms - start_ms - 80)
+        spoken = _budget_text_to_window(text, available_ms)
+        if not spoken:
+            continue
+        # Keep end = start + available so fit uses the hard window.
+        normalized.append(
+            (start, start + available_ms / 1000.0, spoken, vlabel)
+        )
 
     if not normalized:
         raise ValueError("No timed segments available for TTS.")
-
-    normalized.sort(key=lambda x: x[0])
 
     work_dir.mkdir(parents=True, exist_ok=True)
     fit_dir = work_dir / "fitted"
     fit_dir.mkdir(exist_ok=True)
     clip_paths = asyncio.run(_synthesize_segmented(normalized, work_dir, style))
 
-    last_end = max(end for _, end, _, _ in normalized)
-    if total_duration_sec and total_duration_sec > last_end:
-        total_ms = int(math.ceil(total_duration_sec * 1000)) + 250
-    else:
-        total_ms = int(math.ceil(last_end * 1000)) + 1000
-
-    timeline = AudioSegment.silent(duration=max(total_ms, 1000), frame_rate=44100).set_channels(2)
+    timeline = AudioSegment.silent(
+        duration=max(total_ms, 1000), frame_rate=44100
+    ).set_channels(2)
     placements: list[tuple[float, float, str]] = []
-    cursor_ms = 0
     used_female = any("Female" in v for *_, v in normalized)
 
-    for i, ((start, end, text, _v), clip_path) in enumerate(zip(normalized, clip_paths)):
+    for i, ((start, end, text, _v), clip_path) in enumerate(
+        zip(normalized, clip_paths)
+    ):
         if not clip_path.exists() or clip_path.stat().st_size <= 0:
             continue
 
         start_ms = max(0, int(start * 1000))
-        soft_ms = max(240, int((end - start) * 1000))
-
-        if i + 1 < len(normalized):
-            next_start_ms = max(0, int(normalized[i + 1][0] * 1000))
-            gap = max(0, next_start_ms - (start_ms + soft_ms))
-            hard_ms = soft_ms + int(gap * 0.85)
-            hard_end = next_start_ms - 30
-        else:
-            hard_ms = max(soft_ms, total_ms - start_ms - 80)
-            hard_end = total_ms - 40
+        # Hard window already baked into end from budgeting.
+        hard_ms = max(240, int((end - start) * 1000))
+        soft_ms = hard_ms
 
         try:
             clip = _fit_natural(
@@ -345,22 +395,14 @@ def synthesize_timed_speech(
         if clip.frame_rate != 44100:
             clip = clip.set_frame_rate(44100)
 
-        # Prefer cue start; only delay if previous line still speaking.
+        # CRITICAL for long videos: always start on cue time — never stack delay.
         position = start_ms
-        if position < cursor_ms:
-            position = cursor_ms
-
-        max_len = max(200, hard_end - position)
-        # Do NOT chop words off — if still long after mild speed-up, allow
-        # slight overrun and push the next cue (subs will use placements).
-        if len(clip) > max_len + 200:
-            # Extra mild trim of trailing silence only.
-            clip = clip[: max(max_len, int(len(clip) * 0.92))]
+        if len(clip) > hard_ms:
+            clip = clip[:hard_ms]
 
         timeline = timeline.overlay(clip, position=max(0, position))
-        end_ms = max(0, position) + len(clip)
+        end_ms = position + len(clip)
         placements.append((position / 1000.0, end_ms / 1000.0, text))
-        cursor_ms = end_ms + 30
 
     if not placements:
         raise RuntimeError(

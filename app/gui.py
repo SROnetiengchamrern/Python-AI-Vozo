@@ -38,7 +38,26 @@ SUBTITLE_SIZES = {
     "Small": 46,
 }
 
-SOURCE_LANGS = ["Auto Detect", "English", "Chinese", "Thai", "Vietnamese", "Japanese"]
+SOURCE_LANGS = [
+    "Auto Detect",
+    "English",
+    "Chinese",
+    "Korean",
+    "Japanese",
+    "Thai",
+    "Vietnamese",
+]
+
+# UI label -> Whisper / translator language code
+SOURCE_LANG_CODES = {
+    "Auto Detect": "auto",
+    "English": "en",
+    "Chinese": "zh",
+    "Korean": "ko",
+    "Japanese": "ja",
+    "Thai": "th",
+    "Vietnamese": "vi",
+}
 
 PROCESS_STEPS = [
     "Extracting audio",
@@ -786,9 +805,11 @@ class VideoKhmerApp(ctk.CTk):
         if not video:
             return
 
+        source_code = SOURCE_LANG_CODES.get(self.source_var.get(), "auto")
         options = AnalyzeOptions(
             video_path=video,
             whisper_model=self.model_var.get(),
+            source_language=None if source_code == "auto" else source_code,
             detect_speakers=self.detect_speakers_var.get(),
             detect_gender=self.detect_gender_var.get(),
             max_speakers=3 if self.keep_voices_var.get() else 1,
@@ -844,10 +865,12 @@ class VideoKhmerApp(ctk.CTk):
         out_raw = self.save_entry.get().strip()
         output_dir = Path(out_raw) if out_raw else None
 
+        source_code = SOURCE_LANG_CODES.get(self.source_var.get(), "auto")
         options = ConversionOptions(
             video_path=video,
             mode=mode,
             language=self.target_var.get(),
+            source_language=source_code,
             voice=default_voice,
             translate_speech=self.translate_var.get(),
             generate_voice=self.gen_speech_var.get(),

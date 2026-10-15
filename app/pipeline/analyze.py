@@ -66,6 +66,7 @@ class AnalysisResult:
 class AnalyzeOptions:
     video_path: Path
     whisper_model: str = "base"
+    source_language: str | None = None  # en/zh/ko/ja/… or None for auto
     detect_speakers: bool = True
     detect_gender: bool = True
     max_speakers: int = 3
@@ -97,8 +98,21 @@ def analyze_video(
         extract_audio(video_path, wav_path)
 
         report(25, "Transcribing + detecting language...")
-        transcript = transcribe_audio(wav_path, model_size=options.whisper_model)
-        lang_code = (transcript.language or "unknown").lower()
+        force_lang = None
+        if options.source_language and options.source_language not in (
+            "auto",
+            "",
+            "unknown",
+        ):
+            force_lang = options.source_language
+        transcript = transcribe_audio(
+            wav_path,
+            model_size=options.whisper_model,
+            language=force_lang,
+        )
+        lang_code = (force_lang or transcript.language or "unknown").lower()
+        if lang_code.startswith("zh"):
+            lang_code = "zh"
         lang_name = LANG_NAMES.get(lang_code, lang_code.title())
 
         if not transcript.segments:

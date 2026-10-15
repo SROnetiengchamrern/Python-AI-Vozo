@@ -37,6 +37,7 @@ class ConversionOptions:
     video_path: Path
     mode: str  # "subtitle" | "voice" | "full"
     language: str = "Khmer"
+    source_language: str = "auto"  # en / zh / ko / ja / th / vi / auto
     voice: str = "Khmer Female 1"
     translate_speech: bool = True
     generate_voice: bool = True
@@ -128,12 +129,20 @@ def run_conversion(
         wav_path = work / "audio.wav"
         extract_audio(video_path, wav_path)
 
+        whisper_lang = None
+        if options.source_language and options.source_language not in ("auto", "", "unknown"):
+            whisper_lang = options.source_language
+
         if options.pre_transcript is not None:
             report(20, "Using Analyze transcript...")
             transcript = options.pre_transcript  # type: ignore[assignment]
         else:
             report(20, "Transcribing speech (Whisper)...")
-            transcript = transcribe_audio(wav_path, model_size=options.whisper_model)
+            transcript = transcribe_audio(
+                wav_path,
+                model_size=options.whisper_model,
+                language=whisper_lang,
+            )
         transcript_path = out_dir / f"{stem}_original.txt"
         transcript_path.write_text(transcript.text, encoding="utf-8")
 
@@ -141,7 +150,16 @@ def run_conversion(
         khmer_text_path: Path | None = None
         if options.translate_speech:
             report(40, "Translating to Khmer...")
-            src_lang = getattr(transcript, "language", "auto") or "auto"
+            # Prefer explicit Source Language (Korean / Japanese / …).
+            src_lang = whisper_lang or getattr(transcript, "language", "auto") or "auto"
+            # Normalize Whisper variants (zh-cn, japanese, …).
+            src_lang = str(src_lang).lower().strip()
+            if src_lang.startswith("zh"):
+                src_lang = "zh"
+            elif src_lang in ("japanese", "jp"):
+                src_lang = "ja"
+            elif src_lang in ("korean", "kr"):
+                src_lang = "ko"
             khmer = translate_transcript(transcript, source=src_lang, target="km")
 
         # Speak/show money-style numbers in Khmer units (៥មុឺន, ១លាន, …).
