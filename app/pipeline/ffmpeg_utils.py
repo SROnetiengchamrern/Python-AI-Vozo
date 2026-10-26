@@ -173,7 +173,7 @@ def burn_subtitles(video_path: Path, subtitle_path: Path, output_path: Path) -> 
     else:
         vf = (
             f"subtitles='{escaped}':fontsdir='{fonts_escaped}':"
-            "force_style='FontName=Battambang,Alignment=2,MarginV=55,"
+            "force_style='FontName=Battambang,Alignment=2,MarginV=120,"
             "Fontsize=64,PrimaryColour=&H000000FF,OutlineColour=&H00FFFFFF,"
             "BorderStyle=1,Outline=4,Shadow=1.5,Bold=1'"
         )

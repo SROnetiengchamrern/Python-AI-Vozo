@@ -238,7 +238,8 @@ def write_ass_cues(
     size = max(40, min(int(font_size), 78))
     outline_w = round(2.8 + size / 32, 1)
     shadow_w = round(1.0 + size / 100, 1)
-    margin_v = max(48, int(size * 0.7))
+    # Higher MarginV = caption sits a bit higher above the bottom edge.
+    margin_v = max(120, int(size * 1.45))
 
     primary = "&H000000FF"
     secondary = "&H000000FF"

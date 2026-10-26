@@ -152,14 +152,31 @@ def run_conversion(
             report(40, "Translating to Khmer...")
             # Prefer explicit Source Language (Korean / Japanese / …).
             src_lang = whisper_lang or getattr(transcript, "language", "auto") or "auto"
-            # Normalize Whisper variants (zh-cn, japanese, …).
+            # Normalize Whisper / UI variants (zh-cn, indonesian, tagalog, …).
             src_lang = str(src_lang).lower().strip()
+            _SRC_ALIASES = {
+                "japanese": "ja",
+                "jp": "ja",
+                "korean": "ko",
+                "kr": "ko",
+                "indonesian": "id",
+                "bahasa": "id",
+                "malay": "ms",
+                "filipino": "tl",
+                "tagalog": "tl",
+                "burmese": "my",
+                "myanmar": "my",
+                "persian": "fa",
+                "farsi": "fa",
+                "lao": "lo",
+                "sinhala": "si",
+                "mongolian": "mn",
+                "kazakh": "kk",
+            }
             if src_lang.startswith("zh"):
                 src_lang = "zh"
-            elif src_lang in ("japanese", "jp"):
-                src_lang = "ja"
-            elif src_lang in ("korean", "kr"):
-                src_lang = "ko"
+            else:
+                src_lang = _SRC_ALIASES.get(src_lang, src_lang)
             khmer = translate_transcript(transcript, source=src_lang, target="km")
 
         # Speak/show money-style numbers in Khmer units (៥មុឺន, ១លាន, …).
