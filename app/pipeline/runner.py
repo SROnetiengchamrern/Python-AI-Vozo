@@ -43,10 +43,10 @@ class ConversionOptions:
     generate_voice: bool = True
     replace_audio: bool = True
     burn_in_subtitles: bool = True
-    keep_background: bool = False
+    keep_background: bool = True
     whisper_model: str = "base"
     subtitle_font_size: int = 64
-    voice_style: str = "Drama"
+    voice_style: str = "Natural"
     output_dir: Path | None = None
     speaker_voices: dict[str, str] | None = None
     analyzed_segments: list | None = None
@@ -257,7 +257,8 @@ def run_conversion(
                 )
             else:
                 # Unchecked = Khmer voice only (no music).
-                replace_audio(video_path, voice_audio, dest_video)
+                # voice_eq=False: TTS already applied natural clarity (avoid double EQ).
+                replace_audio(video_path, voice_audio, dest_video, voice_eq=False)
             return dest_video
 
         if mode == "subtitle":

@@ -16,22 +16,23 @@ from .subtitles import normalize_khmer_text
 
 logger = logging.getLogger(__name__)
 
-# voice_label -> (edge_voice, rate, pitch)
-# Female voices: slightly slower + clearer (Sreymom reads muddy when rushed).
+# Official Microsoft Edge neural voices for Khmer (only 2 exist).
+# Base = standard AI speak (+0% / +0Hz). Speaker 2 = light variant only.
 VOICE_CHOICES = {
-    "Khmer Female": ("km-KH-SreymomNeural", "-8%", "+0Hz"),
-    "Khmer Female 1": ("km-KH-SreymomNeural", "-8%", "+0Hz"),
-    "Khmer Female 2": ("km-KH-SreymomNeural", "-4%", "+2Hz"),
+    "Khmer Female": ("km-KH-SreymomNeural", "+0%", "+0Hz"),
+    "Khmer Female 1": ("km-KH-SreymomNeural", "+0%", "+0Hz"),
+    "Khmer Female 2": ("km-KH-SreymomNeural", "+3%", "+2Hz"),
     "Khmer Male": ("km-KH-PisethNeural", "+0%", "+0Hz"),
     "Khmer Male 1": ("km-KH-PisethNeural", "+0%", "+0Hz"),
-    "Khmer Male 2": ("km-KH-PisethNeural", "-4%", "-2Hz"),
+    "Khmer Male 2": ("km-KH-PisethNeural", "-3%", "-2Hz"),
 }
 
+# Style nudges on top of the standard neural voice.
 VOICE_STYLES = {
-    "Natural": ("+0%", "+0Hz"),
-    "Drama": ("+0%", "+0Hz"),
+    "Natural": ("+0%", "+0Hz"),   # standard AI speak (recommended)
+    "Drama": ("-3%", "+0Hz"),     # slightly slower, clearer drama lines
     "Soft": ("-6%", "+1Hz"),
-    "Energetic": ("+8%", "+1Hz"),
+    "Energetic": ("+8%", "+2Hz"),
 }
 
 KHMER_VOICE_OPTIONS = [
@@ -41,40 +42,46 @@ KHMER_VOICE_OPTIONS = [
     "Khmer Male 2",
 ]
 
-# Mild speed-up only. Long videos lock each line to its cue window (no drift stack).
-_MAX_SPEEDUP = 1.28
+# Keep speech natural — heavy atempo makes AI voice sound fake.
+_MAX_SPEEDUP = 1.18
 _MIN_SLOWDOWN = 0.94
-# Slightly conservative — female Natural (-8%) reads slower than raw Edge default.
-_CHARS_PER_SEC = 10.0
+# Standard Edge Khmer pace (~11 chars/sec at +0%).
+_CHARS_PER_SEC = 11.0
+# Slight Edge volume lift (clearer without EQ harshness).
+_TTS_VOLUME = "+6%"
 _SPEAKABLE_RE = re.compile(r"[\u1780-\u17B3\u17B6-\u17C8A-Za-z0-9]")
 
 
-def resolve_voice(voice_label: str, style: str = "Drama") -> tuple[str, str, str]:
+def resolve_voice(voice_label: str, style: str = "Natural") -> tuple[str, str, str]:
+    """
+    Return (edge_voice_id, rate, pitch) for standard AI Khmer speech.
+
+    Natural = official Edge defaults (clearest).
+    Other styles only nudge rate/pitch lightly.
+    """
     voice, base_rate, base_pitch = VOICE_CHOICES.get(
         voice_label, VOICE_CHOICES["Khmer Female 1"]
     )
-    style_rate, style_pitch = VOICE_STYLES.get(style, VOICE_STYLES["Drama"])
-    female = "Female" in voice_label
+    style_rate, style_pitch = VOICE_STYLES.get(style, VOICE_STYLES["Natural"])
 
     if style == "Natural":
         return voice, base_rate, base_pitch
 
-    # Female clarity first: keep slower base; never rush women for "Drama".
-    if female:
-        if style == "Soft":
-            return voice, "-12%", "+1Hz"
-        if style == "Energetic":
-            return voice, "-2%", "+2Hz"
-        # Drama / default
-        if "Female 2" in voice_label:
-            return voice, "-4%", "+2Hz"
-        return voice, "-8%", "+0Hz"
+    # Combine speaker base with style (prefer style when it sets a non-zero nudge).
+    rate = style_rate if style_rate != "+0%" else base_rate
+    pitch = style_pitch if style_pitch != "+0Hz" else base_pitch
 
-    if style == "Drama" and "Male 2" in voice_label:
-        return voice, "-2%", "-2Hz"
-    if style_rate != "+0%" or style_pitch != "+0Hz":
-        return voice, style_rate, style_pitch
-    return voice, base_rate, base_pitch
+    # Keep Female 2 / Male 2 identity under Drama/Soft.
+    if style == "Drama" and "Female 2" in voice_label:
+        rate, pitch = "+0%", "+2Hz"
+    elif style == "Drama" and "Male 2" in voice_label:
+        rate, pitch = "-5%", "-2Hz"
+    elif style == "Soft" and "Female" in voice_label:
+        rate, pitch = "-6%", "+1Hz"
+    elif style == "Energetic" and "Female 2" in voice_label:
+        rate, pitch = "+10%", "+3Hz"
+
+    return voice, rate, pitch
 
 
 def resolve_voice_id(voice_label: str) -> str:
@@ -156,6 +163,7 @@ async def _save_with_retry(
     *,
     rate: str = "+0%",
     pitch: str = "+0Hz",
+    volume: str = _TTS_VOLUME,
     retries: int = 5,
 ) -> bool:
     global _last_tts_error
@@ -164,7 +172,11 @@ async def _save_with_retry(
     for attempt in range(retries):
         try:
             communicate = edge_tts.Communicate(
-                text=text, voice=voice, rate=rate, pitch=pitch
+                text=text,
+                voice=voice,
+                rate=rate,
+                pitch=pitch,
+                volume=volume,
             )
             await communicate.save(str(output_path))
             if output_path.exists() and output_path.stat().st_size > 0:
@@ -190,7 +202,7 @@ def synthesize_speech(
     output_path: Path,
     *,
     voice_label: str = "Khmer Female 1",
-    style: str = "Drama",
+    style: str = "Natural",
 ) -> Path:
     text = _sanitize_tts_text(text)
     if not text:
@@ -302,23 +314,44 @@ def _fit_natural(
 
 
 def _clarity_filter(*, female: bool) -> str:
-    """Make dialogue easier to hear (women especially benefit from presence EQ)."""
+    """Broadcast-natural polish — light presence, no harsh 'robot EQ'."""
     if female:
         return (
-            "highpass=f=90,"
-            "equalizer=f=2500:t=q:w=1.1:g=3.5,"
-            "equalizer=f=4500:t=q:w=1.0:g=2.0,"
-            "acompressor=threshold=-18dB:ratio=2.5:attack=8:release=80,"
-            "loudnorm=I=-14:TP=-1.5:LRA=8,"
-            "alimiter=limit=0.95"
+            "highpass=f=80,"
+            "equalizer=f=1800:t=q:w=1.0:g=1.5,"
+            "equalizer=f=3200:t=q:w=1.0:g=1.2,"
+            "acompressor=threshold=-20dB:ratio=2.0:attack=12:release=100,"
+            "loudnorm=I=-16:TP=-1.5:LRA=9,"
+            "alimiter=limit=0.96"
         )
     return (
-        "highpass=f=80,"
-        "equalizer=f=2200:t=q:w=1.0:g=2.0,"
-        "acompressor=threshold=-18dB:ratio=2.2:attack=10:release=90,"
-        "loudnorm=I=-14:TP=-1.5:LRA=9,"
-        "alimiter=limit=0.95"
+        "highpass=f=70,"
+        "equalizer=f=1600:t=q:w=1.0:g=1.2,"
+        "acompressor=threshold=-20dB:ratio=1.8:attack=12:release=110,"
+        "loudnorm=I=-16:TP=-1.5:LRA=10,"
+        "alimiter=limit=0.96"
     )
+
+
+def _trim_silence(clip: "AudioSegment", *, silence_thresh: int = -42) -> "AudioSegment":
+    """Remove Edge TTS leading/trailing silence for tighter, clearer speech."""
+    from pydub import AudioSegment
+    from pydub.silence import detect_leading_silence
+
+    if len(clip) <= 0:
+        return clip
+    lead = detect_leading_silence(clip, silence_threshold=silence_thresh, chunk_size=10)
+    trail = detect_leading_silence(
+        clip.reverse(), silence_threshold=silence_thresh, chunk_size=10
+    )
+    start = min(lead, max(0, len(clip) - 40))
+    end = max(start + 40, len(clip) - trail)
+    trimmed = clip[start:end]
+    # Tiny pads so words don't click-cut.
+    pad = AudioSegment.silent(duration=25, frame_rate=clip.frame_rate).set_channels(
+        clip.channels
+    )
+    return pad + trimmed + pad
 
 
 def synthesize_timed_speech(
@@ -328,7 +361,7 @@ def synthesize_timed_speech(
     voice_label: str = "Khmer Female 1",
     work_dir: Path,
     total_duration_sec: float | None = None,
-    style: str = "Drama",
+    style: str = "Natural",
 ) -> tuple[Path, list[tuple[float, float, str]]]:
     """
     Build timed Khmer dub locked to picture cue times.
@@ -419,6 +452,10 @@ def synthesize_timed_speech(
             clip = clip.set_channels(2)
         if clip.frame_rate != 44100:
             clip = clip.set_frame_rate(44100)
+        try:
+            clip = _trim_silence(clip)
+        except Exception:  # noqa: BLE001
+            pass
 
         # CRITICAL for long videos: always start on cue time — never stack delay.
         position = start_ms

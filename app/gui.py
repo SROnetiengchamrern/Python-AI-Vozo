@@ -420,10 +420,10 @@ class VideoKhmerApp(ctk.CTk):
             row=0, column=2, sticky="w", padx=(8, 0)
         )
 
-        self.voice_style_var = ctk.StringVar(value="Drama")
+        self.voice_style_var = ctk.StringVar(value="Natural")
         self.style_menu = ctk.CTkOptionMenu(
             prow,
-            values=["Drama", "Natural", "Soft", "Energetic"],
+            values=["Natural", "Drama", "Soft", "Energetic"],
             variable=self.voice_style_var,
             fg_color=PANEL_2,
             button_color=ACCENT,
@@ -440,7 +440,7 @@ class VideoKhmerApp(ctk.CTk):
         )
         self.sub_size_menu.grid(row=1, column=1, sticky="ew", padx=8, pady=(4, 0))
 
-        self.model_var = ctk.StringVar(value="base")
+        self.model_var = ctk.StringVar(value="small")
         self.model_menu = ctk.CTkOptionMenu(
             prow,
             values=["tiny", "base", "small", "medium"],
